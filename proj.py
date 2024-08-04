@@ -140,6 +140,7 @@ def create_influxdb_client():
 def on_message(client, userdata, message):
     """
     Callback function for handling incoming MQTT messages.
+    Controls the GPIO based on received commands.
     """
     print(f"Received message '{message.payload.decode()}' on topic '{message.topic}'")
     # Handle message to control GPIO
@@ -228,11 +229,11 @@ def start_alert():
     toggle_buzzer(GPIO.HIGH)
     time.sleep(2)
     toggle_buzzer(GPIO.LOW)
-    time.sleep(2)
-    toggle_buzzer(GPIO.HIGH)
     time.sleep(1)
+    toggle_buzzer(GPIO.HIGH)
+    time.sleep(2)
     toggle_buzzer(GPIO.LOW)
-            
+
 
 def main():
     """
@@ -257,16 +258,16 @@ def main():
                 influxdb_client.write_points(curr_stat.to_influx_payload())
                 print("[+]\tPublished sensor data to InfluxDB")
                 
-                if curr_stat.get_temperature_level() == HIGH_TEMPERATURE:
+                prev_temp_lvl = curr_temp_lvl  # Update previous temperature level
+                curr_temp_lvl = curr_stat.get_temperature_level()
+                if curr_temp_lvl == HIGH_TEMPERATURE:
                     toggle_led(GPIO.HIGH)
                     toggle_relay(GPIO.HIGH)
-                    prev_temp_lvl=curr_temp_lvl
-                    curr_temp_lvl=HIGH_TEMPERATURE
+
                 else:
                     toggle_led(GPIO.LOW)
                     toggle_relay(GPIO.LOW)
-                    prev_temp_lvl=curr_temp_lvl
-                    curr_temp_lvl=NORMAL_TEMPERATURE
+
                     
                 # temperature changes from normal to high
                 if prev_temp_lvl == NORMAL_TEMPERATURE and curr_temp_lvl == HIGH_TEMPERATURE:
