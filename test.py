@@ -6,6 +6,7 @@ import paho.mqtt.client as mqtt
 from influxdb import InfluxDBClient
 import json
 
+
 # Constants
 READ_INTERVAL = 5  # Interval in seconds for sensor reading and actuator toggling
 
@@ -92,40 +93,6 @@ def main():
         GPIO.cleanup()
         print("GPIO cleanup completed and program stopped.")
 
-
-# try:
-#     while True:
-#         # Test LED
-#         GPIO.output(LED_PIN, GPIO.HIGH)
-#         print("LED on")
-#         time.sleep(1)
-#         GPIO.output(LED_PIN, GPIO.LOW)
-#         print("LED off")
-#         time.sleep(1)
-
-#         # Test Relay/Fan
-#         GPIO.output(RELAY_PIN, GPIO.HIGH)
-#         print("Relay on (Fan should be on)")
-#         time.sleep(1)
-#         GPIO.output(RELAY_PIN, GPIO.LOW)
-#         print("Relay off (Fan should be off)")
-#         time.sleep(1)
-
-#         # Test Buzzer
-#         GPIO.output(BUZZER_PIN, GPIO.HIGH)
-#         print("Buzzer on")
-#         time.sleep(1)
-#         GPIO.output(BUZZER_PIN, GPIO.LOW)
-#         print("Buzzer off")
-#         time.sleep(1)
-
-#         # Test BME280 Sensor
-#         read_bme280()
-#         time.sleep(1)
-
-# except KeyboardInterrupt:
-#     GPIO.cleanup()
-#     print("GPIO cleanup completed and program stopped.")
 
 if __name__ == "__main__":
     main()
