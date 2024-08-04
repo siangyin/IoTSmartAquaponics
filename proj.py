@@ -4,8 +4,8 @@ import bme280
 import RPi.GPIO as GPIO
 import paho.mqtt.client as mqtt
 from influxdb import InfluxDBClient
-import json
-import psutil
+import sys
+
 
 # Constants
 READ_INTERVAL = 5  # Interval in seconds for sensor reading and actuator toggling
@@ -15,6 +15,14 @@ MQTT_BROKER = "test.mosquitto.org"
 MQTT_TOPIC_CONTROL = "tp/eng/grp5/control"
 MQTT_TOPIC_DATA = "tp/eng/grp5/data"
 MQTT_PORT = 1883
+
+# Constants for InfluxDB
+INFLUX_USER = "root"
+INFLUX_PW = "root"
+INFLUX_DB = "mydb5"
+INFLUX_HOST = "localhost"
+INFLUX_PORT = 8086
+INFLUX_MEASUREMENT = "sensors_data"
 
 # GPIO Pins
 LED_PIN = 17
@@ -38,77 +46,114 @@ try:
 except Exception as e:
     print(f"Failed to initialize BME280 sensor: {e}")
     GPIO.cleanup()
-    exit(1)
+    sys.exit(1)  # Use sys.exit for clean exit
+
+
+class SensorData:
+    def __init__(self, data, location, sensor_id):
+        self.time = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.localtime())
+        self.location = location
+        self.sensor_id = sensor_id
+        self.temperature = round(data.temperature, 2)
+        self.humidity = round(data.humidity, 2)
+        self.pressure = round(data.pressure, 2)
+
+    def to_influx_payload(self):
+        return [
+            {
+                "time": self.time,
+                "measurement": INFLUX_MEASUREMENT,
+                "tags": {
+                    "location": self.location,
+                    "sensor_id": self.sensor_id,
+                },
+                "fields": {
+                    "temperature": self.temperature,
+                    "humidity": self.humidity,
+                    "pressure": self.pressure,
+                },
+            }
+        ]
+
+    def print_data(self):
+        """Output sensor readings in a human-readable format."""
+        print(
+            f"Temperature: {self.temperature} °C, "
+            f"Humidity: {self.humidity} %, "
+            f"Pressure: {self.pressure} hPa"
+        )
+
+    def to_mqtt_payload(self):
+        return (
+            f"Location: {self.location}\n"
+            f"Temperature: {self.temperature} °C\n"
+            f"Humidity: {self.humidity} %\n"
+            f"Pressure: {self.pressure} hPa\n"
+            f"Time: {self.time}"
+        )
+
+
+
+
+# Initialize the InfluxDB client
+def create_influxdb_client():
+    """Initialize the InfluxDB client."""
+    try:
+        client = InfluxDBClient(
+            host=INFLUX_HOST,
+            port=INFLUX_PORT,
+            username=INFLUX_USER,
+            password=INFLUX_PW,
+            database=INFLUX_DB,
+        )
+        # Ensure the database is created
+        # client.create_database(INFLUX_DB)  # Uncomment if you want to ensure the database is created
+        return client
+    except Exception as e:
+        print(f"Failed to create InfluxDB client: {e}")
+        sys.exit(1)
 
 
 def on_message(client, userdata, message):
-    """Callback function for handling incoming messages."""
+    """Callback function for handling incoming MQTT messages."""
     print(f"Received message '{message.payload.decode()}' on topic '{message.topic}'")
 
 
 def start_mqtt():
     """Setup MQTT client, start loop, and return the client instance."""
     client = mqtt.Client()
-    print(
-        "\nCreated client object at "
-        + time.strftime("%d-%m-%Y  %H:%M:%S", time.localtime())
-    )
+    print("\nCreated client object at " + time.strftime("%d-%m-%Y  %H:%M:%S", time.localtime()))
     client.on_message = on_message  # Set the callback function for message handling
 
     try:
         client.connect(MQTT_BROKER, MQTT_PORT)
         client.subscribe(MQTT_TOPIC_CONTROL, qos=1)
         client.loop_start()
-        print("--> connected to broker & Subscribed to control topics")
+        print("--> Connected to broker & subscribed to control topics")
     except Exception as e:
         print(f"Failed to connect to MQTT broker: {e}")
-        exit(1)
+        sys.exit(1)
 
     return client
 
 
-def publish_data(client, data):
+def publish_data(client, sensor_data):
     """Publish data to the MQTT broker."""
-    payload = (
-        f"Location: Tank 1\n"
-        f"Temperature: {data['temperature']} °C\n"
-        f"Humidity: {data['humidity']} %\n"
-        f"Pressure: {data['pressure']} hPa\n"
-        f"Time: {time.strftime('%d-%m-%Y  %H:%M:%S', time.localtime())}"
-    )
+    payload = sensor_data.to_mqtt_payload()
     try:
         client.publish(MQTT_TOPIC_DATA, payload)
-        print(f"Data published: {payload}")
+        print(f">> MQTT Data published: {payload}")
     except Exception as e:
-        print(f"--error publishing: {e}")
+        print(f"--Error publishing: {e}")
 
 
 def read_bme280():
-    """Read and print BME280 sensor data."""
+    """Read BME280 sensor data."""
     try:
         # Sample data from the BME280 sensor
         data = bme280.sample(bus, BME_ADD, bme_calibration_params)
-
-        # Debugging: Print raw data
-        print(f"BME280 Raw Data: {data}")
-
-        # Round the sensor data for clarity
-        sensor_data = {
-            "temperature": round(data.temperature, 2),
-            "humidity": round(data.humidity, 2),
-            "pressure": round(data.pressure, 2),
-        }
-
-        # Debugging: Print formatted sensor data
-        print(f"Formatted Sensor Data: {sensor_data}")
-
-        # Output sensor readings in a human-readable format
-        print(
-            f"Temperature: {sensor_data['temperature']} °C, "
-            f"Humidity: {sensor_data['humidity']} %, "
-            f"Pressure: {sensor_data['pressure']} hPa"
-        )
-
+        sensor_data = SensorData(data, location="Tank 1", sensor_id="sensor_01")
+        sensor_data.print_data()
         return sensor_data
     except Exception as e:
         print("Failed to read from BME280 sensor. Error:", e)
@@ -135,16 +180,23 @@ def off_components():
     toggle_buzzer(GPIO.LOW)
 
 def main():
-    #  Main function to monitor system metrics and publish to MQTT
+    """Main function to monitor system metrics, publish to MQTT, and write to InfluxDB."""
     mqtt_client = start_mqtt()
-
+    influxdb_client = create_influxdb_client()
     try:
         while True:
+            # Read BME280 sensor data
             curr_stat = read_bme280()
             if curr_stat:
+                # Publish to MQTT
                 publish_data(mqtt_client, curr_stat)
+                # Write to InfluxDB
+                influxdb_client.write_points(curr_stat.to_influx_payload())
+                print("Written data to InfluxDB:", curr_stat.to_influx_payload())
+
             time.sleep(READ_INTERVAL)
-            
+
+            # Toggle components
             toggle_led(GPIO.HIGH)
             time.sleep(READ_INTERVAL)
             toggle_led(GPIO.LOW)
@@ -159,8 +211,6 @@ def main():
             time.sleep(READ_INTERVAL)
             toggle_buzzer(GPIO.LOW)
             time.sleep(READ_INTERVAL)
-
-
 
     except KeyboardInterrupt:
         print("Stopping program...")
