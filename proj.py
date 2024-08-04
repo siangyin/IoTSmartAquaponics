@@ -4,13 +4,11 @@ import bme280
 import RPi.GPIO as GPIO
 import paho.mqtt.client as mqtt
 from influxdb import InfluxDBClient
-import json
 import sys
-
 
 # Constants
 READ_INTERVAL = 5  # Interval in seconds for sensor reading and actuator toggling
-TEMP_THRESHOLD = 30
+TEMP_THRESHOLD = 30  # Temperature threshold for alerts
 NORMAL_TEMPERATURE = 'N'
 HIGH_TEMPERATURE = 'H'
 
@@ -54,6 +52,9 @@ except Exception as e:
 
 
 class SensorData:
+    """
+    A class to encapsulate sensor data and provide methods for formatting and evaluation.
+    """
     def __init__(self, data, location, sensor_id):
         self.time = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.localtime())
         self.location = location
@@ -63,6 +64,9 @@ class SensorData:
         self.pressure = round(data.pressure, 2)
 
     def to_influx_payload(self):
+        """
+        Convert sensor data to the payload format expected by InfluxDB.
+        """
         return [
             {
                 "time": self.time,
@@ -81,6 +85,9 @@ class SensorData:
     
         
     def to_mqtt_payload(self):
+        """
+        Convert sensor data to a string payload for MQTT transmission.
+        """
         return (
             f"Location: {self.location}\n"
             f"Temperature: {self.temperature} °C\n"
@@ -90,13 +97,18 @@ class SensorData:
         )
     
     def get_temperature_level(self):
+        """
+        Determine the temperature level based on a predefined threshold.
+        """
         if self.temperature > TEMP_THRESHOLD:
             return HIGH_TEMPERATURE
         else:
             return NORMAL_TEMPERATURE
 
     def print_data(self):
-        """Output sensor readings in a human-readable format."""
+        """
+        Print sensor readings in a human-readable format.
+        """
         print(
             f"Temperature: {self.temperature} °C, "
             f"Humidity: {self.humidity} %, "
@@ -106,7 +118,9 @@ class SensorData:
 
 # Initialize the InfluxDB client
 def create_influxdb_client():
-    """Initialize the InfluxDB client."""
+    """
+    Initialize and return the InfluxDB client.
+    """
     try:
         client = InfluxDBClient(
             host=INFLUX_HOST,
@@ -124,12 +138,13 @@ def create_influxdb_client():
 
 
 def on_message(client, userdata, message):
-    """Callback function for handling incoming MQTT messages."""
+    """
+    Callback function for handling incoming MQTT messages.
+    """
     print(f"Received message '{message.payload.decode()}' on topic '{message.topic}'")
     # Handle message to control GPIO
     if message.topic == MQTT_TOPIC_CONTROL:
         command = message.payload.decode().upper()
-        print(f"Handle command: {command}")
         if command == "LED ON":
             toggle_led(GPIO.HIGH)
         elif command == "LED OFF":
@@ -145,9 +160,10 @@ def on_message(client, userdata, message):
 
 
 def start_mqtt():
-    """Setup MQTT client, start loop, and return the client instance."""
+    """
+    Initialize MQTT client, connect to broker, and subscribe to control topics.
+    """
     client = mqtt.Client()
-    print("\nCreated client object at " + time.strftime("%d-%m-%Y  %H:%M:%S", time.localtime()))
     client.on_message = on_message  # Set the callback function for message handling
 
     try:
@@ -163,15 +179,20 @@ def start_mqtt():
 
 
 def publish_data(client, sensor_data):
-    """Publish data to the MQTT broker."""
+    """
+    Publish sensor data to the MQTT broker.
+    """
     try:
         client.publish(MQTT_TOPIC_DATA, sensor_data.to_mqtt_payload())
+        print("[+]\tPublished sensor data to MQTT")
     except Exception as e:
         print(f"Failed to publish data to MQTT: {e}")
 
 
 def read_bme280():
-    """Read BME280 sensor data."""
+    """
+    Read and return BME280 sensor data.
+    """
     try:
         # Sample data from the BME280 sensor
         data = bme280.sample(bus, BME_ADD, bme_calibration_params)
@@ -179,8 +200,6 @@ def read_bme280():
     except Exception as e:
         print("Failed to read from BME280 sensor. Error:", e)
         return None  # Explicitly return None to indicate failure
-
-
 
 
 def toggle_led(state):
@@ -194,13 +213,18 @@ def toggle_buzzer(state):
     GPIO.output(BUZZER_PIN, state)
 
 def off_components():
+    """
+    Turn off all components.
+    """
     toggle_led(GPIO.LOW)
     toggle_relay(GPIO.LOW)
     toggle_buzzer(GPIO.LOW)
 
 
 def start_alert():
-    """Alert using buzzer."""
+    """
+    Activate the buzzer for an alert sequence.
+    """
     toggle_buzzer(GPIO.HIGH)
     time.sleep(2)
     toggle_buzzer(GPIO.LOW)
@@ -211,7 +235,9 @@ def start_alert():
             
 
 def main():
-    """Main function to monitor system metrics, publish to MQTT, and write to InfluxDB."""
+    """
+    Main function to monitor temperature, publish data, and handle alerts.
+    """
     mqtt_client = start_mqtt()
     influxdb_client = create_influxdb_client()
     
@@ -222,11 +248,14 @@ def main():
         while True:
             # Read BME280 sensor data
             curr_stat = read_bme280()
+            
             if curr_stat:
+                curr_stat.print_data()
                 # Publish to MQTT
                 publish_data(mqtt_client, curr_stat)
                 # Write to InfluxDB
                 influxdb_client.write_points(curr_stat.to_influx_payload())
+                print("[+]\tPublished sensor data to InfluxDB")
                 
                 if curr_stat.get_temperature_level() == HIGH_TEMPERATURE:
                     toggle_led(GPIO.HIGH)
