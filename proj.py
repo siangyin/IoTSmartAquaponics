@@ -4,11 +4,15 @@ import bme280
 import RPi.GPIO as GPIO
 import paho.mqtt.client as mqtt
 from influxdb import InfluxDBClient
+import json
 import sys
 
 
 # Constants
 READ_INTERVAL = 5  # Interval in seconds for sensor reading and actuator toggling
+TEMP_THRESHOLD = 30
+NORMAL_TEMPERATURE = 'N'
+HIGH_TEMPERATURE = 'H'
 
 # Define the MQTT broker address and topics
 MQTT_BROKER = "test.mosquitto.org"
@@ -74,15 +78,8 @@ class SensorData:
                 },
             }
         ]
-
-    def print_data(self):
-        """Output sensor readings in a human-readable format."""
-        print(
-            f"Temperature: {self.temperature} °C, "
-            f"Humidity: {self.humidity} %, "
-            f"Pressure: {self.pressure} hPa"
-        )
-
+    
+        
     def to_mqtt_payload(self):
         return (
             f"Location: {self.location}\n"
@@ -91,8 +88,20 @@ class SensorData:
             f"Pressure: {self.pressure} hPa\n"
             f"Time: {self.time}"
         )
+    
+    def get_temperature_level(self):
+        if self.temperature > TEMP_THRESHOLD:
+            return HIGH_TEMPERATURE
+        else:
+            return NORMAL_TEMPERATURE
 
-
+    def print_data(self):
+        """Output sensor readings in a human-readable format."""
+        print(
+            f"Temperature: {self.temperature} °C, "
+            f"Humidity: {self.humidity} %, "
+            f"Pressure: {self.pressure} hPa"
+        )
 
 
 # Initialize the InfluxDB client
@@ -117,6 +126,22 @@ def create_influxdb_client():
 def on_message(client, userdata, message):
     """Callback function for handling incoming MQTT messages."""
     print(f"Received message '{message.payload.decode()}' on topic '{message.topic}'")
+    # Handle message to control GPIO
+    if message.topic == MQTT_TOPIC_CONTROL:
+        command = message.payload.decode().upper()
+        print(f"Handle command: {command}")
+        if command == "LED ON":
+            toggle_led(GPIO.HIGH)
+        elif command == "LED OFF":
+            toggle_led(GPIO.LOW)
+        elif command == "RELAY ON" or command == "FAN ON":
+            toggle_relay(GPIO.HIGH)
+        elif command == "RELAY OFF" or command == "FAN OFF":
+            toggle_relay(GPIO.LOW)
+        elif command == "BUZZER ON":
+            toggle_buzzer(GPIO.HIGH)
+        elif command == "BUZZER OFF":
+            toggle_buzzer(GPIO.LOW)
 
 
 def start_mqtt():
@@ -129,7 +154,7 @@ def start_mqtt():
         client.connect(MQTT_BROKER, MQTT_PORT)
         client.subscribe(MQTT_TOPIC_CONTROL, qos=1)
         client.loop_start()
-        print("--> Connected to broker & subscribed to control topics")
+        print("Connected to broker & subscribed to control topics")
     except Exception as e:
         print(f"Failed to connect to MQTT broker: {e}")
         sys.exit(1)
@@ -139,12 +164,10 @@ def start_mqtt():
 
 def publish_data(client, sensor_data):
     """Publish data to the MQTT broker."""
-    payload = sensor_data.to_mqtt_payload()
     try:
-        client.publish(MQTT_TOPIC_DATA, payload)
-        print(f">> MQTT Data published: {payload}")
+        client.publish(MQTT_TOPIC_DATA, sensor_data.to_mqtt_payload())
     except Exception as e:
-        print(f"--Error publishing: {e}")
+        print(f"Failed to publish data to MQTT: {e}")
 
 
 def read_bme280():
@@ -152,37 +175,49 @@ def read_bme280():
     try:
         # Sample data from the BME280 sensor
         data = bme280.sample(bus, BME_ADD, bme_calibration_params)
-        sensor_data = SensorData(data, location="Tank 1", sensor_id="sensor_01")
-        sensor_data.print_data()
-        return sensor_data
+        return SensorData(data, location="tank 1", sensor_id="sensor 1")
     except Exception as e:
         print("Failed to read from BME280 sensor. Error:", e)
         return None  # Explicitly return None to indicate failure
 
 
+
+
 def toggle_led(state):
     GPIO.output(LED_PIN, state)
-    print("LED", "on" if state else "off")
-
 
 def toggle_relay(state):
     GPIO.output(RELAY_PIN, state)
-    print("Relay", "on (Fan should be on)" if state else "off (Fan should be off)")
 
 
 def toggle_buzzer(state):
     GPIO.output(BUZZER_PIN, state)
-    print("Buzzer", "on" if state else "off")
 
 def off_components():
     toggle_led(GPIO.LOW)
     toggle_relay(GPIO.LOW)
     toggle_buzzer(GPIO.LOW)
 
+
+def start_alert():
+    """Alert using buzzer."""
+    toggle_buzzer(GPIO.HIGH)
+    time.sleep(2)
+    toggle_buzzer(GPIO.LOW)
+    time.sleep(2)
+    toggle_buzzer(GPIO.HIGH)
+    time.sleep(1)
+    toggle_buzzer(GPIO.LOW)
+            
+
 def main():
     """Main function to monitor system metrics, publish to MQTT, and write to InfluxDB."""
     mqtt_client = start_mqtt()
     influxdb_client = create_influxdb_client()
+    
+    prev_temp_lvl = NORMAL_TEMPERATURE
+    curr_temp_lvl='N'
+
     try:
         while True:
             # Read BME280 sensor data
@@ -192,25 +227,25 @@ def main():
                 publish_data(mqtt_client, curr_stat)
                 # Write to InfluxDB
                 influxdb_client.write_points(curr_stat.to_influx_payload())
-                print("Written data to InfluxDB:", curr_stat.to_influx_payload())
+                
+                if curr_stat.get_temperature_level() == HIGH_TEMPERATURE:
+                    toggle_led(GPIO.HIGH)
+                    toggle_relay(GPIO.HIGH)
+                    prev_temp_lvl=curr_temp_lvl
+                    curr_temp_lvl=HIGH_TEMPERATURE
+                else:
+                    toggle_led(GPIO.LOW)
+                    toggle_relay(GPIO.LOW)
+                    prev_temp_lvl=curr_temp_lvl
+                    curr_temp_lvl=NORMAL_TEMPERATURE
+                    
+                # temperature changes from normal to high
+                if prev_temp_lvl == NORMAL_TEMPERATURE and curr_temp_lvl == HIGH_TEMPERATURE:
+                    start_alert()
+                else:
+                    time.sleep(READ_INTERVAL)
 
-            time.sleep(READ_INTERVAL)
 
-            # Toggle components
-            toggle_led(GPIO.HIGH)
-            time.sleep(READ_INTERVAL)
-            toggle_led(GPIO.LOW)
-            time.sleep(READ_INTERVAL)
-
-            toggle_relay(GPIO.HIGH)
-            time.sleep(READ_INTERVAL)
-            toggle_relay(GPIO.LOW)
-            time.sleep(READ_INTERVAL)
-
-            toggle_buzzer(GPIO.HIGH)
-            time.sleep(READ_INTERVAL)
-            toggle_buzzer(GPIO.LOW)
-            time.sleep(READ_INTERVAL)
 
     except KeyboardInterrupt:
         print("Stopping program...")
