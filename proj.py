@@ -46,7 +46,7 @@ try:
     bus = smbus2.SMBus(I2C_PORT)
     bme_calibration_params = bme280.load_calibration_params(bus, BME_ADD)
 except Exception as e:
-    print(f"Failed to initialize BME280 sensor: {e}")
+    print(f"[ERROR]\tFailed to initialize BME280 sensor: {e}")
     GPIO.cleanup()
     sys.exit(1)  # Use sys.exit for clean exit
 
@@ -110,6 +110,7 @@ class SensorData:
         Print sensor readings in a human-readable format.
         """
         print(
+            f"[INFO]\t Sensors Data:"
             f"Temperature: {self.temperature} °C, "
             f"Humidity: {self.humidity} %, "
             f"Pressure: {self.pressure} hPa"
@@ -133,7 +134,7 @@ def create_influxdb_client():
         # client.create_database(INFLUX_DB)  # Uncomment if you want to ensure the database is created
         return client
     except Exception as e:
-        print(f"Failed to create InfluxDB client: {e}")
+        print(f"[ERROR]\tFailed to create InfluxDB client: {e}")
         sys.exit(1)
 
 
@@ -142,7 +143,7 @@ def on_message(client, userdata, message):
     Callback function for handling incoming MQTT messages.
     Controls the GPIO based on received commands.
     """
-    print(f"Received message '{message.payload.decode()}' on topic '{message.topic}'")
+    print(f"[INFO]\tnReceived message '{message.payload.decode()}' on topic '{message.topic}'")
     # Handle message to control GPIO
     if message.topic == MQTT_TOPIC_CONTROL:
         command = message.payload.decode().upper()
@@ -171,9 +172,9 @@ def start_mqtt():
         client.connect(MQTT_BROKER, MQTT_PORT)
         client.subscribe(MQTT_TOPIC_CONTROL, qos=1)
         client.loop_start()
-        print("Connected to broker & subscribed to control topics")
+        print("[INFO]\tConnected to broker & subscribed to control topics")
     except Exception as e:
-        print(f"Failed to connect to MQTT broker: {e}")
+        print(f"[ERROR]\tFailed to connect to MQTT broker: {e}")
         sys.exit(1)
 
     return client
@@ -185,9 +186,9 @@ def publish_data(client, sensor_data):
     """
     try:
         client.publish(MQTT_TOPIC_DATA, sensor_data.to_mqtt_payload())
-        print("[+]\tPublished sensor data to MQTT")
+        print("[INFO]\tPublished sensor data to MQTT")
     except Exception as e:
-        print(f"Failed to publish data to MQTT: {e}")
+        print(f"[ERROR]\tFailed to publish data to MQTT: {e}")
 
 
 def read_bme280():
@@ -199,7 +200,7 @@ def read_bme280():
         data = bme280.sample(bus, BME_ADD, bme_calibration_params)
         return SensorData(data, location="tank 1", sensor_id="sensor 1")
     except Exception as e:
-        print("Failed to read from BME280 sensor. Error:", e)
+        print("[ERROR]\tFailed to read from BME280 sensor. Error:", e)
         return None  # Explicitly return None to indicate failure
 
 
@@ -256,7 +257,7 @@ def main():
                 publish_data(mqtt_client, curr_stat)
                 # Write to InfluxDB
                 influxdb_client.write_points(curr_stat.to_influx_payload())
-                print("[+]\tPublished sensor data to InfluxDB")
+                print("[INFO]\tPublished sensor data to InfluxDB")
                 
                 prev_temp_lvl = curr_temp_lvl  # Update previous temperature level
                 curr_temp_lvl = curr_stat.get_temperature_level()
@@ -271,6 +272,7 @@ def main():
                     
                 # temperature changes from normal to high
                 if prev_temp_lvl == NORMAL_TEMPERATURE and curr_temp_lvl == HIGH_TEMPERATURE:
+                    print(f"[ALERT]\tTemperature Exceeded Threshold ({TEMP_THRESHOLD}°C)!")
                     start_alert()
                 else:
                     time.sleep(READ_INTERVAL)
@@ -278,13 +280,13 @@ def main():
 
 
     except KeyboardInterrupt:
-        print("Stopping program...")
+        print("[INFO]\tStopping program...")
         off_components()
     finally:
         mqtt_client.loop_stop()
         mqtt_client.disconnect()
         GPIO.cleanup()
-        print("GPIO cleanup & MQTT disconnected from broker and program stopped.")
+        print("[INFO]\tGPIO cleanup & MQTT disconnected from broker and program stopped.")
 
 
 if __name__ == "__main__":
