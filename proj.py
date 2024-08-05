@@ -152,9 +152,9 @@ def on_message(client, userdata, message):
         elif command == "LED OFF":
             toggle_led(GPIO.LOW)
         elif command == "RELAY ON" or command == "FAN ON":
-            toggle_relay(GPIO.HIGH)
+            toggle_fan(GPIO.HIGH)
         elif command == "RELAY OFF" or command == "FAN OFF":
-            toggle_relay(GPIO.LOW)
+            toggle_fan(GPIO.LOW)
         elif command == "BUZZER ON":
             toggle_buzzer(GPIO.HIGH)
         elif command == "BUZZER OFF":
@@ -163,7 +163,8 @@ def on_message(client, userdata, message):
 
 def start_mqtt():
     """
-    Initialize MQTT client, connect to broker, and subscribe to control topics.
+    Initialize MQTT client, connect to broker, and subscribe to control topics. 
+    Handles setup for communication with the MQTT broker.
     """
     client = mqtt.Client()
     client.on_message = on_message  # Set the callback function for message handling
@@ -207,7 +208,7 @@ def read_bme280():
 def toggle_led(state):
     GPIO.output(LED_PIN, state)
 
-def toggle_relay(state):
+def toggle_fan(state):
     GPIO.output(RELAY_PIN, state)
 
 
@@ -219,7 +220,7 @@ def off_components():
     Turn off all components.
     """
     toggle_led(GPIO.LOW)
-    toggle_relay(GPIO.LOW)
+    toggle_fan(GPIO.LOW)
     toggle_buzzer(GPIO.LOW)
 
 
@@ -239,12 +240,15 @@ def start_alert():
 def main():
     """
     Main function to monitor temperature, publish data, and handle alerts.
+    Coordinates sensor reading, data publishing, and alerting.
     """
+    # Start the MQTT client
     mqtt_client = start_mqtt()
+    # Initialize the InfluxDB client
     influxdb_client = create_influxdb_client()
     
     prev_temp_lvl = NORMAL_TEMPERATURE
-    curr_temp_lvl='N'
+    curr_temp_lvl = NORMAL_TEMPERATURE
 
     try:
         while True:
@@ -261,23 +265,21 @@ def main():
                 
                 prev_temp_lvl = curr_temp_lvl  # Update previous temperature level
                 curr_temp_lvl = curr_stat.get_temperature_level()
-                if curr_temp_lvl == HIGH_TEMPERATURE:
-                    toggle_led(GPIO.HIGH)
-                    toggle_relay(GPIO.HIGH)
-
-                else:
-                    toggle_led(GPIO.LOW)
-                    toggle_relay(GPIO.LOW)
-
                     
-                # temperature changes from normal to high
+                # temperature changes
                 if prev_temp_lvl == NORMAL_TEMPERATURE and curr_temp_lvl == HIGH_TEMPERATURE:
                     print(f"[ALERT]\tTemperature Exceeded Threshold ({TEMP_THRESHOLD}°C)!")
+                    toggle_led(GPIO.HIGH)
+                    toggle_fan(GPIO.HIGH)
                     start_alert()
+                elif prev_temp_lvl == HIGH_TEMPERATURE and curr_temp_lvl == NORMAL_TEMPERATURE:
+                    print(f"[INFO]\tTemperature is now within safe range")
+                    toggle_led(GPIO.LOW)
+                    toggle_fan(GPIO.LOW)
+                    time.sleep(READ_INTERVAL)
                 else:
                     time.sleep(READ_INTERVAL)
-
-
+                    
 
     except KeyboardInterrupt:
         print("[INFO]\tStopping program...")
